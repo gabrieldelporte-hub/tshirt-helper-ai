@@ -131,11 +131,9 @@ def remove_background_bria(image: Image.Image, api_token: str) -> Image.Image:
             raise RuntimeError("Cle API Replicate invalide. Verifie ta cle dans le panneau droit.")
         if e.code == 402:
             raise RuntimeError(
-                "Paiement requis sur Replicate (erreur 402).
-"
-                "Meme avec des credits, Replicate exige une carte bancaire enregistree.
-"
-                "Va sur replicate.com > Settings > Billing et ajoute une carte."
+                "Paiement requis (402). Meme avec des credits, "
+                "Replicate exige une carte bancaire. "
+                "Va sur replicate.com > Settings > Billing."
             )
         raise RuntimeError(f"Erreur Replicate {e.code} : {body[:300]}")
 
