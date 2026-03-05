@@ -11,9 +11,6 @@ def remove_solid_background(
     sample_corners: bool = True,
     target_color: tuple[int, int, int] | None = None,
 ) -> Image.Image:
-    """
-    Remove a solid background using flood-fill seeded from all image edges.
-    """
     img = image.convert("RGBA")
     data = np.array(img, dtype=np.uint8)
     h, w = data.shape[:2]
@@ -67,10 +64,6 @@ def remove_solid_background(
 
 
 def remove_background_ai(image: Image.Image) -> Image.Image:
-    """
-    Remove background using rembg via a subprocess (avoids QThread/sys.exit conflicts).
-    Downloads the U2Net model (~170 MB) on first use.
-    """
     import subprocess, sys, io, base64
     from pathlib import Path
 
@@ -98,12 +91,13 @@ def remove_background_ai(image: Image.Image) -> Image.Image:
 def remove_background_bria(image: Image.Image, api_token: str) -> Image.Image:
     """
     Remove background using BRIA RMBG 2.0 via Replicate HTTP API.
-    Model: alexgenovese/remove-background-bria-2
-    Uses urllib directly — no SDK dependency.
+    Uses versioned predictions endpoint (required for community models).
     """
     import io, base64, json, time, urllib.request
 
-    # Encode image as base64 data URI
+    # Latest version of alexgenovese/remove-background-bria-2
+    VERSION_ID = "361975516c86bd0f33c31d4f2073070e5cb463318a65afb032a709c1c9804da0"
+
     buf = io.BytesIO()
     image.convert("RGBA").save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -115,9 +109,14 @@ def remove_background_bria(image: Image.Image, api_token: str) -> Image.Image:
         "Prefer": "wait",
     }
 
-    payload = json.dumps({"input": {"image": data_uri}}).encode()
+    # Use /v1/predictions with version ID (correct endpoint for community models)
+    payload = json.dumps({
+        "version": VERSION_ID,
+        "input": {"image": data_uri},
+    }).encode()
+
     req = urllib.request.Request(
-        "https://api.replicate.com/v1/models/alexgenovese/remove-background-bria-2/predictions",
+        "https://api.replicate.com/v1/predictions",
         data=payload,
         headers=headers,
         method="POST",
