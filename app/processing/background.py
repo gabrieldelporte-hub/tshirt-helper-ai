@@ -122,8 +122,22 @@ def remove_background_bria(image: Image.Image, api_token: str) -> Image.Image:
         method="POST",
     )
 
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        prediction = json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            prediction = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        if e.code == 401:
+            raise RuntimeError("Cle API Replicate invalide. Verifie ta cle dans le panneau droit.")
+        if e.code == 402:
+            raise RuntimeError(
+                "Paiement requis sur Replicate (erreur 402).
+"
+                "Meme avec des credits, Replicate exige une carte bancaire enregistree.
+"
+                "Va sur replicate.com > Settings > Billing et ajoute une carte."
+            )
+        raise RuntimeError(f"Erreur Replicate {e.code} : {body[:300]}")
 
     # Poll until complete
     poll_url = prediction.get("urls", {}).get("get") or f"https://api.replicate.com/v1/predictions/{prediction['id']}"
