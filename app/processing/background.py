@@ -156,7 +156,14 @@ def remove_background_bria(image: Image.Image, api_token: str) -> Image.Image:
     with urllib.request.urlopen(output_url, timeout=60) as r:
         result_data = r.read()
 
-    return Image.open(io.BytesIO(result_data)).convert("RGBA")
+    result = Image.open(io.BytesIO(result_data)).convert("RGBA")
+
+    # Restore original resolution if BRIA downscaled the image
+    orig_size = image.size
+    if result.size != orig_size:
+        result = result.resize(orig_size, Image.LANCZOS)
+
+    return result
 
 
 def apply_color_hints(
