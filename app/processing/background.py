@@ -137,20 +137,20 @@ def remove_background_bria(image: Image.Image, api_token: str) -> Image.Image:
             )
         raise RuntimeError(f"Erreur Replicate {e.code} : {body[:300]}")
 
-    # Poll until complete
+    # Poll until complete (120 tentatives x 3s = 6 minutes max, cold start inclus)
     poll_url = prediction.get("urls", {}).get("get") or f"https://api.replicate.com/v1/predictions/{prediction['id']}"
-    for _ in range(60):
+    for _ in range(120):
         status = prediction.get("status")
         if status == "succeeded":
             break
         if status in ("failed", "canceled"):
             raise RuntimeError(f"BRIA a echoue : {prediction.get('error', status)}")
-        time.sleep(2)
+        time.sleep(3)
         poll_req = urllib.request.Request(poll_url, headers={"Authorization": f"Bearer {api_token}"})
         with urllib.request.urlopen(poll_req, timeout=30) as r:
             prediction = json.loads(r.read())
     else:
-        raise RuntimeError("BRIA : timeout — la prediction a pris trop de temps")
+        raise RuntimeError("BRIA : timeout apres 6 minutes. Verifie ton compte Replicate.")
 
     output = prediction.get("output")
     if not output:
