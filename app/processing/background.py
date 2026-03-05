@@ -98,9 +98,10 @@ def remove_background_ai(image: Image.Image) -> Image.Image:
 def remove_background_bria(image: Image.Image, api_token: str) -> Image.Image:
     """
     Remove background using BRIA RMBG 2.0 via Replicate HTTP API.
+    Model: alexgenovese/remove-background-bria-2
     Uses urllib directly — no SDK dependency.
     """
-    import io, base64, json, time, urllib.request, urllib.error
+    import io, base64, json, time, urllib.request
 
     # Encode image as base64 data URI
     buf = io.BytesIO()
@@ -111,13 +112,12 @@ def remove_background_bria(image: Image.Image, api_token: str) -> Image.Image:
     headers = {
         "Authorization": f"Bearer {api_token}",
         "Content-Type": "application/json",
-        "Prefer": "wait",  # ask Replicate to wait up to 60s before returning
+        "Prefer": "wait",
     }
 
-    # Create prediction
     payload = json.dumps({"input": {"image": data_uri}}).encode()
     req = urllib.request.Request(
-        "https://api.replicate.com/v1/models/bria-ai/bria-rmbg-2.0/predictions",
+        "https://api.replicate.com/v1/models/alexgenovese/remove-background-bria-2/predictions",
         data=payload,
         headers=headers,
         method="POST",
@@ -126,7 +126,7 @@ def remove_background_bria(image: Image.Image, api_token: str) -> Image.Image:
     with urllib.request.urlopen(req, timeout=120) as resp:
         prediction = json.loads(resp.read())
 
-    # Poll until complete (fallback if "Prefer: wait" isn't honoured)
+    # Poll until complete
     poll_url = prediction.get("urls", {}).get("get") or f"https://api.replicate.com/v1/predictions/{prediction['id']}"
     for _ in range(60):
         status = prediction.get("status")
@@ -145,7 +145,6 @@ def remove_background_bria(image: Image.Image, api_token: str) -> Image.Image:
     if not output:
         raise RuntimeError("BRIA : aucune sortie recue")
 
-    # output is a URL string or list
     output_url = output[0] if isinstance(output, list) else output
     with urllib.request.urlopen(output_url, timeout=60) as r:
         result_data = r.read()
