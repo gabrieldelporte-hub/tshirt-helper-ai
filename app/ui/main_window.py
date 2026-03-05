@@ -19,6 +19,7 @@ from app.processing.background import (
 )
 from app.processing.colors import get_dominant_colors, rgb_to_hex, rgb_to_cmyk
 from app.processing.exporter import export_png, export_resized, get_image_info, STANDARD_SIZES_CM
+from app.processing.upscaler import upscale_image
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +59,28 @@ class ProcessingWorker(QThread):
                                            self.tolerance)
             self.done.emit(result)
         except (Exception, SystemExit) as e:
+            self.error.emit(str(e))
+
+
+# ---------------------------------------------------------------------------
+# Worker thread for upscaling
+# ---------------------------------------------------------------------------
+
+class UpscaleWorker(QThread):
+    done = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(self, image, api_token, scale):
+        super().__init__()
+        self.image = image
+        self.api_token = api_token
+        self.scale = scale
+
+    def run(self):
+        try:
+            result = upscale_image(self.image, self.api_token, self.scale)
+            self.done.emit(result)
+        except Exception as e:
             self.error.emit(str(e))
 
 
@@ -114,6 +137,7 @@ class MainWindow(QMainWindow):
         self._exclude_colors: list[tuple[int,int,int]] = []
         self._protect_colors: list[tuple[int,int,int]] = []
         self._eyedropper_target: str | None = None
+        self._upscale_worker: UpscaleWorker | None = None
 
         self._build_ui()
 
@@ -396,6 +420,41 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(api_group)
 
+        # --- Upscaling ---
+        upscale_group = QGroupBox("Upscaling (Real-ESRGAN)")
+        upscale_layout = QVBoxLayout(upscale_group)
+
+        upscale_hint = QLabel("Augmente la resolution pour l impression 300 DPI.")
+        upscale_hint.setStyleSheet("color: #888; font-size: 10px;")
+        upscale_layout.addWidget(upscale_hint)
+
+        scale_row = QHBoxLayout()
+        scale_row.addWidget(QLabel("Facteur :"))
+        self.scale_combo = QComboBox()
+        self.scale_combo.addItem("x2", 2)
+        self.scale_combo.addItem("x4", 4)
+        self.scale_combo.addItem("x8", 8)
+        self.scale_combo.setCurrentIndex(1)  # x4 par defaut
+        scale_row.addWidget(self.scale_combo)
+        upscale_layout.addLayout(scale_row)
+
+        self.upscale_btn = QPushButton("Upscaler l image")
+        self.upscale_btn.setEnabled(False)
+        self.upscale_btn.clicked.connect(self._run_upscale)
+        self.upscale_btn.setStyleSheet(
+            "QPushButton { background: #6d4c41; color: white; font-weight: bold; padding: 6px; border-radius: 4px; }"
+            "QPushButton:disabled { background: #333; color: #666; }"
+            "QPushButton:hover { background: #8d6e63; }"
+        )
+        upscale_layout.addWidget(self.upscale_btn)
+
+        self.upscale_status = QLabel("")
+        self.upscale_status.setWordWrap(True)
+        self.upscale_status.setStyleSheet("color: #6bcb77; font-size: 11px;")
+        upscale_layout.addWidget(self.upscale_status)
+
+        layout.addWidget(upscale_group)
+
         # --- Export ---
         exp_group = QGroupBox("Export")
         exp_layout = QVBoxLayout(exp_group)
@@ -572,6 +631,7 @@ class MainWindow(QMainWindow):
         self.process_btn.setEnabled(True)
         self.process_btn.setText("Supprimer le fond")
         self.refine_reset_btn.setEnabled(True)
+        self.upscale_btn.setEnabled(True)
         self._update_info(result)
         self._refresh_colors(result)
 
@@ -666,6 +726,42 @@ class MainWindow(QMainWindow):
                     item.widget().deleteLater()
         self.pip_apply_btn.setEnabled(False)
         self._toggle_eyedropper(self._eyedropper_target or "")
+
+    def _run_upscale(self):
+        img = self._refined_image if self._refined_image is not None else self.processed_image
+        if img is None:
+            return
+        api_token = self.api_key_input.text().strip()
+        if not api_token:
+            self.upscale_status.setText("Cle Replicate manquante.")
+            self.upscale_status.setStyleSheet("color: #e63946; font-size: 11px;")
+            return
+        scale = self.scale_combo.currentData()
+        self.upscale_btn.setEnabled(False)
+        self.upscale_btn.setText(f"Upscaling x{scale}...")
+        self.upscale_status.setText("")
+        self._upscale_worker = UpscaleWorker(img.copy(), api_token, scale)
+        self._upscale_worker.done.connect(self._on_upscale_done)
+        self._upscale_worker.error.connect(self._on_upscale_error)
+        self._upscale_worker.start()
+
+    def _on_upscale_done(self, result):
+        self.processed_image = result.copy()
+        self._refined_image = None
+        self.preview.set_after(result, keep_zoom=False)
+        self.export_btn.setEnabled(True)
+        self.upscale_btn.setEnabled(True)
+        self.upscale_btn.setText("Upscaler l image")
+        self.upscale_status.setText(f"Fait : {result.width}x{result.height}px")
+        self.upscale_status.setStyleSheet("color: #6bcb77; font-size: 11px;")
+        self._update_info(result)
+        self._refresh_colors(result)
+
+    def _on_upscale_error(self, msg):
+        self.upscale_btn.setEnabled(True)
+        self.upscale_btn.setText("Upscaler l image")
+        self.upscale_status.setText(f"Erreur : {msg}")
+        self.upscale_status.setStyleSheet("color: #e63946; font-size: 11px;")
 
     def _on_preview_bg_changed(self):
         color = self.preview_bg_combo.currentData()
