@@ -551,9 +551,21 @@ class MainWindow(QMainWindow):
             else:
                 image = Image.open(str(path))
 
-            self.original_image = image.convert("RGBA").copy()
+            image = image.convert("RGBA")
+
+            # Redimensionnement automatique a l import (max 2048px)
+            MAX_PX = 2048
+            if max(image.size) > MAX_PX:
+                ratio = MAX_PX / max(image.size)
+                new_size = (int(image.width * ratio), int(image.height * ratio))
+                image = image.resize(new_size, Image.LANCZOS)
+                resize_note = f" (reduit a {new_size[0]}x{new_size[1]}px)"
+            else:
+                resize_note = ""
+
+            self.original_image = image.copy()
             self.processed_image = None
-            self.file_label.setText(path.name)
+            self.file_label.setText(path.name + resize_note)
             self.preview.set_before(self.original_image)
             self.preview.set_after(None)
             self.process_btn.setEnabled(True)
