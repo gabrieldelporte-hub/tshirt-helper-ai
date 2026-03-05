@@ -13,9 +13,6 @@ def remove_solid_background(
 ) -> Image.Image:
     """
     Remove a solid background using flood-fill seeded from all image edges.
-
-    Only pixels reachable from the border (and within color tolerance) are
-    removed — isolated interior regions of the same color are kept intact.
     """
     img = image.convert("RGBA")
     data = np.array(img, dtype=np.uint8)
@@ -66,7 +63,6 @@ def remove_solid_background(
 
     result = data.copy()
     result[visited, 3] = 0
-
     return Image.fromarray(result, "RGBA")
 
 
@@ -101,33 +97,58 @@ def remove_background_ai(image: Image.Image) -> Image.Image:
 
 def remove_background_bria(image: Image.Image, api_token: str) -> Image.Image:
     """
-    Remove background using BRIA RMBG 2.0 via Replicate API.
-    Requires a valid Replicate API token (replicate.com).
+    Remove background using BRIA RMBG 2.0 via Replicate HTTP API.
+    Uses urllib directly — no SDK dependency.
     """
-    import replicate
-    import io
-    import urllib.request
+    import io, base64, json, time, urllib.request, urllib.error
 
-    client = replicate.Client(api_token=api_token)
-
+    # Encode image as base64 data URI
     buf = io.BytesIO()
     image.convert("RGBA").save(buf, format="PNG")
-    buf.seek(0)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    data_uri = f"data:image/png;base64,{b64}"
 
-    output = client.run(
-        "bria-ai/bria-rmbg-2.0",
-        input={"image": buf},
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json",
+        "Prefer": "wait",  # ask Replicate to wait up to 60s before returning
+    }
+
+    # Create prediction
+    payload = json.dumps({"input": {"image": data_uri}}).encode()
+    req = urllib.request.Request(
+        "https://api.replicate.com/v1/models/bria-ai/bria-rmbg-2.0/predictions",
+        data=payload,
+        headers=headers,
+        method="POST",
     )
 
-    # output is a FileOutput object or URL string
-    if hasattr(output, "read"):
-        result_data = output.read()
-    elif isinstance(output, str):
-        with urllib.request.urlopen(output) as resp:
-            result_data = resp.read()
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        prediction = json.loads(resp.read())
+
+    # Poll until complete (fallback if "Prefer: wait" isn't honoured)
+    poll_url = prediction.get("urls", {}).get("get") or f"https://api.replicate.com/v1/predictions/{prediction['id']}"
+    for _ in range(60):
+        status = prediction.get("status")
+        if status == "succeeded":
+            break
+        if status in ("failed", "canceled"):
+            raise RuntimeError(f"BRIA a echoue : {prediction.get('error', status)}")
+        time.sleep(2)
+        poll_req = urllib.request.Request(poll_url, headers={"Authorization": f"Bearer {api_token}"})
+        with urllib.request.urlopen(poll_req, timeout=30) as r:
+            prediction = json.loads(r.read())
     else:
-        # replicate FileOutput
-        result_data = bytes(output)
+        raise RuntimeError("BRIA : timeout — la prediction a pris trop de temps")
+
+    output = prediction.get("output")
+    if not output:
+        raise RuntimeError("BRIA : aucune sortie recue")
+
+    # output is a URL string or list
+    output_url = output[0] if isinstance(output, list) else output
+    with urllib.request.urlopen(output_url, timeout=60) as r:
+        result_data = r.read()
 
     return Image.open(io.BytesIO(result_data)).convert("RGBA")
 
@@ -139,12 +160,6 @@ def apply_color_hints(
     protect_colors: list[tuple[int,int,int]],
     tolerance: int = 25,
 ) -> Image.Image:
-    """
-    Post-process a removal result using user-defined color hints.
-
-    - exclude_colors: pixels matching these colors in the original -> made transparent
-    - protect_colors: pixels matching these colors in the original -> restored opaque
-    """
     orig = np.array(original.convert("RGBA"), dtype=np.int32)
     data = np.array(result.convert("RGBA"), dtype=np.uint8)
     rgb = orig[:, :, :3]
@@ -169,9 +184,6 @@ def refine_edges(
     erode: int = 0,
     feather: int = 0,
 ) -> Image.Image:
-    """
-    Post-process the alpha channel of an RGBA image for cleaner edges.
-    """
     from PIL import ImageFilter
     from scipy.ndimage import binary_erosion
 
@@ -198,7 +210,6 @@ def refine_edges(
 
 
 def get_background_color(image: Image.Image) -> tuple[int, int, int]:
-    """Sample the most likely background color from image corners."""
     img = image.convert("RGB")
     w, h = img.size
     corners = [
