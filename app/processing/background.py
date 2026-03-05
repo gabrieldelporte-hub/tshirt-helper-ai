@@ -95,9 +95,6 @@ def remove_background_bria(image: Image.Image, api_token: str) -> Image.Image:
     """
     import io, base64, json, time, urllib.request
 
-    # Latest version of alexgenovese/remove-background-bria-2
-    VERSION_ID = "361975516c86bd0f33c31d4f2073070e5cb463318a65afb032a709c1c9804da0"
-
     buf = io.BytesIO()
     image.convert("RGBA").save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -109,14 +106,13 @@ def remove_background_bria(image: Image.Image, api_token: str) -> Image.Image:
         "Prefer": "wait",
     }
 
-    # Use /v1/predictions with version ID (correct endpoint for community models)
+    # Official BRIA model endpoint (always-on GPU, no cold start)
     payload = json.dumps({
-        "version": VERSION_ID,
         "input": {"image": data_uri},
     }).encode()
 
     req = urllib.request.Request(
-        "https://api.replicate.com/v1/predictions",
+        "https://api.replicate.com/v1/models/bria/remove-background/predictions",
         data=payload,
         headers=headers,
         method="POST",
