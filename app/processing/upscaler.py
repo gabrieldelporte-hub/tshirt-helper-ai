@@ -13,8 +13,17 @@ def upscale_image(image: Image.Image, api_token: str, scale: int = 4) -> Image.I
 
     VERSION_ID = "f121d640bd286e1fdc67f9799164c1d5be36ff74576ee11c803ae5b665dd46aa"
 
+    # Real-ESRGAN input limit: ~1024px recommended, 1440px max
+    # Downscale before sending so the x4 result stays manageable
+    MAX_INPUT = 1024
+    send_image = image.copy()
+    if max(send_image.size) > MAX_INPUT:
+        ratio = MAX_INPUT / max(send_image.size)
+        new_size = (int(send_image.width * ratio), int(send_image.height * ratio))
+        send_image = send_image.resize(new_size, Image.LANCZOS)
+
     buf = io.BytesIO()
-    image.convert("RGBA").save(buf, format="PNG")
+    send_image.convert("RGBA").save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
     data_uri = f"data:image/png;base64,{b64}"
 
