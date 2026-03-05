@@ -148,7 +148,30 @@ class MainWindow(QMainWindow):
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        root = QHBoxLayout(central)
+        wrapper = QVBoxLayout(central)
+        wrapper.setContentsMargins(0, 0, 0, 0)
+        wrapper.setSpacing(0)
+
+        # Barre superieure avec bouton restart
+        topbar = QWidget()
+        topbar.setFixedHeight(32)
+        topbar.setStyleSheet("background: #0d0d0d;")
+        topbar_layout = QHBoxLayout(topbar)
+        topbar_layout.setContentsMargins(12, 4, 12, 4)
+        topbar_layout.addStretch()
+        restart_btn = QPushButton("Relancer l app")
+        restart_btn.setFixedHeight(22)
+        restart_btn.clicked.connect(self._restart)
+        restart_btn.setStyleSheet(
+            "QPushButton { background: #c0392b; color: white; font-size: 11px; "
+            "font-weight: bold; border: none; border-radius: 4px; padding: 0 10px; }"
+            "QPushButton:hover { background: #e74c3c; }"
+        )
+        topbar_layout.addWidget(restart_btn)
+        wrapper.addWidget(topbar)
+
+        root_widget = QWidget()
+        root = QHBoxLayout(root_widget)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(12)
 
@@ -160,6 +183,8 @@ class MainWindow(QMainWindow):
 
         right = self._build_right_panel()
         root.addWidget(right, stretch=0)
+
+        wrapper.addWidget(root_widget)
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
@@ -530,6 +555,11 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
+
+    def _restart(self):
+        import subprocess, sys
+        subprocess.Popen([sys.executable] + sys.argv)
+        self.close()
 
     def _open_file(self):
         path, _ = QFileDialog.getOpenFileName(
