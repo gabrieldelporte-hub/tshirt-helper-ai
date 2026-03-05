@@ -1,4 +1,4 @@
-"""Background removal — flood fill or AI (rembg)."""
+"""Background removal — flood fill, AI (rembg), or BRIA RMBG 2.0 (Replicate)."""
 
 from PIL import Image
 import numpy as np
@@ -16,21 +16,11 @@ def remove_solid_background(
 
     Only pixels reachable from the border (and within color tolerance) are
     removed — isolated interior regions of the same color are kept intact.
-
-    Args:
-        image: Input PIL image.
-        tolerance: Max per-channel color distance to consider a pixel as background.
-        sample_corners: Auto-detect background color from corners.
-        target_color: Override with a specific RGB color.
-
-    Returns:
-        RGBA image with background replaced by transparency.
     """
     img = image.convert("RGBA")
     data = np.array(img, dtype=np.uint8)
     h, w = data.shape[:2]
 
-    # Determine reference background color
     if target_color is not None:
         bg = np.array(target_color, dtype=np.int32)
     elif sample_corners:
@@ -44,12 +34,10 @@ def remove_solid_background(
     else:
         bg = np.array([255, 255, 255], dtype=np.int32)
 
-    # Build a boolean mask: True = matches background color
     rgb = data[:, :, :3].astype(np.int32)
     diff = np.abs(rgb - bg).max(axis=2)
     is_bg_color = diff <= tolerance
 
-    # BFS flood-fill from every edge pixel that matches the bg color
     visited = np.zeros((h, w), dtype=bool)
     queue = deque()
 
@@ -76,7 +64,6 @@ def remove_solid_background(
                 visited[ny, nx] = True
                 queue.append((ny, nx))
 
-    # Apply: visited pixels become transparent
     result = data.copy()
     result[visited, 3] = 0
 
@@ -93,7 +80,6 @@ def remove_background_ai(image: Image.Image) -> Image.Image:
 
     worker = Path(__file__).parent / "rembg_worker.py"
 
-    # Encode image as base64 PNG
     buf = io.BytesIO()
     image.convert("RGBA").save(buf, format="PNG")
     encoded = base64.b64encode(buf.getvalue())
@@ -107,10 +93,43 @@ def remove_background_ai(image: Image.Image) -> Image.Image:
 
     if result.returncode != 0:
         stderr = result.stderr.decode(errors="replace")
-        raise RuntimeError(f"rembg a échoué :\n{stderr}")
+        raise RuntimeError(f"rembg a echoue :\n{stderr}")
 
     out_data = base64.b64decode(result.stdout)
     return Image.open(io.BytesIO(out_data)).convert("RGBA")
+
+
+def remove_background_bria(image: Image.Image, api_token: str) -> Image.Image:
+    """
+    Remove background using BRIA RMBG 2.0 via Replicate API.
+    Requires a valid Replicate API token (replicate.com).
+    """
+    import replicate
+    import io
+    import urllib.request
+
+    client = replicate.Client(api_token=api_token)
+
+    buf = io.BytesIO()
+    image.convert("RGBA").save(buf, format="PNG")
+    buf.seek(0)
+
+    output = client.run(
+        "bria-ai/bria-rmbg-2.0",
+        input={"image": buf},
+    )
+
+    # output is a FileOutput object or URL string
+    if hasattr(output, "read"):
+        result_data = output.read()
+    elif isinstance(output, str):
+        with urllib.request.urlopen(output) as resp:
+            result_data = resp.read()
+    else:
+        # replicate FileOutput
+        result_data = bytes(output)
+
+    return Image.open(io.BytesIO(result_data)).convert("RGBA")
 
 
 def apply_color_hints(
@@ -123,8 +142,8 @@ def apply_color_hints(
     """
     Post-process a removal result using user-defined color hints.
 
-    - exclude_colors: pixels matching these colors in the original → made transparent
-    - protect_colors: pixels matching these colors in the original → restored opaque
+    - exclude_colors: pixels matching these colors in the original -> made transparent
+    - protect_colors: pixels matching these colors in the original -> restored opaque
     """
     orig = np.array(original.convert("RGBA"), dtype=np.int32)
     data = np.array(result.convert("RGBA"), dtype=np.uint8)
@@ -152,14 +171,6 @@ def refine_edges(
 ) -> Image.Image:
     """
     Post-process the alpha channel of an RGBA image for cleaner edges.
-
-    Args:
-        threshold: Alpha values below this become 0, above become 255 (0 = off).
-        erode: Shrink the subject slightly to remove fringe pixels (0 = off).
-        feather: Soften edges with a slight blur after thresholding (0 = off).
-
-    Returns:
-        RGBA image with refined alpha channel.
     """
     from PIL import ImageFilter
     from scipy.ndimage import binary_erosion
@@ -168,18 +179,15 @@ def refine_edges(
     data = np.array(img, dtype=np.uint8)
     alpha = data[:, :, 3].astype(np.float32)
 
-    # 1. Binarize alpha (crisp edges, no semi-transparency)
     if threshold > 0:
         alpha = np.where(alpha >= threshold, 255.0, 0.0)
 
-    # 2. Erode to remove fringe/halo pixels around edges
     if erode > 0:
         mask = alpha > 127
         structure = np.ones((erode * 2 + 1, erode * 2 + 1), dtype=bool)
         mask = binary_erosion(mask, structure=structure)
         alpha = np.where(mask, alpha, 0.0)
 
-    # 3. Feather (soft blur on alpha for smooth edges after hard threshold)
     if feather > 0:
         alpha_img = Image.fromarray(alpha.astype(np.uint8), "L")
         alpha_img = alpha_img.filter(ImageFilter.GaussianBlur(radius=feather))

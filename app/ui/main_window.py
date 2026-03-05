@@ -6,14 +6,17 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QSlider, QFileDialog, QComboBox,
     QGroupBox, QSpinBox, QDoubleSpinBox, QColorDialog,
-    QScrollArea, QFrame, QSizePolicy, QCheckBox,
+    QScrollArea, QFrame, QSizePolicy, QCheckBox, QLineEdit,
 )
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap, QDragEnterEvent, QDropEvent
 from PIL import Image
 
 from app.ui.preview_widget import PreviewWidget
-from app.processing.background import remove_solid_background, remove_background_ai, refine_edges, apply_color_hints, get_background_color
+from app.processing.background import (
+    remove_solid_background, remove_background_ai, remove_background_bria,
+    refine_edges, apply_color_hints, get_background_color,
+)
 from app.processing.colors import get_dominant_colors, rgb_to_hex, rgb_to_cmyk
 from app.processing.exporter import export_png, export_resized, get_image_info, STANDARD_SIZES_CM
 
@@ -27,7 +30,7 @@ class ProcessingWorker(QThread):
     error = pyqtSignal(str)
 
     def __init__(self, image, mode="classic", tolerance=30, target_color=None,
-                 exclude_colors=None, protect_colors=None):
+                 exclude_colors=None, protect_colors=None, api_token=""):
         super().__init__()
         self.image = image
         self.mode = mode
@@ -35,11 +38,14 @@ class ProcessingWorker(QThread):
         self.target_color = target_color
         self.exclude_colors = exclude_colors or []
         self.protect_colors = protect_colors or []
+        self.api_token = api_token
 
     def run(self):
         try:
             if self.mode == "ai":
                 result = remove_background_ai(self.image)
+            elif self.mode == "bria":
+                result = remove_background_bria(self.image, self.api_token)
             else:
                 result = remove_solid_background(
                     self.image,
@@ -160,7 +166,8 @@ class MainWindow(QMainWindow):
         mode_row.addWidget(QLabel("Methode :"))
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("Classique (flood fill)", "classic")
-        self.mode_combo.addItem("IA (rembg)", "ai")
+        self.mode_combo.addItem("IA locale (rembg)", "ai")
+        self.mode_combo.addItem("BRIA RMBG 2.0 (Replicate)", "bria")
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         mode_row.addWidget(self.mode_combo)
         bg_layout.addLayout(mode_row)
@@ -168,7 +175,13 @@ class MainWindow(QMainWindow):
         self.ai_hint = QLabel("Le modele (~170 Mo) sera telecharge\nautomatiquement au premier usage.")
         self.ai_hint.setStyleSheet("color: #888; font-size: 10px;")
         self.ai_hint.setVisible(False)
+
+        self.bria_hint = QLabel("Renseigne ta cle Replicate dans\nle panneau droit avant de lancer.")
+        self.bria_hint.setStyleSheet("color: #e9c46a; font-size: 10px;")
+        self.bria_hint.setVisible(False)
+
         bg_layout.addWidget(self.ai_hint)
+        bg_layout.addWidget(self.bria_hint)
 
         self.classic_widget = QWidget()
         classic_layout = QVBoxLayout(self.classic_widget)
@@ -360,6 +373,29 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
+        # --- Replicate API Key ---
+        api_group = QGroupBox("BRIA RMBG 2.0 — Replicate")
+        api_layout = QVBoxLayout(api_group)
+
+        api_info = QLabel("Cle API Replicate :")
+        api_info.setStyleSheet("font-size: 11px; color: #aaa;")
+        api_layout.addWidget(api_info)
+
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setPlaceholderText("r8_xxxxxxxxxxxxxxxxxxxx")
+        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key_input.setStyleSheet(
+            "QLineEdit { background: #1e1e1e; border: 1px solid #444; border-radius: 4px; padding: 4px 6px; color: #ddd; }"
+        )
+        api_layout.addWidget(self.api_key_input)
+
+        api_link = QLabel('<a href="https://replicate.com/account/api-tokens" style="color:#40916c;">Obtenir une cle gratuite</a>')
+        api_link.setOpenExternalLinks(True)
+        api_link.setStyleSheet("font-size: 10px;")
+        api_layout.addWidget(api_link)
+
+        layout.addWidget(api_group)
+
         # --- Export ---
         exp_group = QGroupBox("Export")
         exp_layout = QVBoxLayout(exp_group)
@@ -488,16 +524,32 @@ class MainWindow(QMainWindow):
         self.bg_color_preview.setStyleSheet("background: transparent; border: 1px solid #555;")
 
     def _on_mode_changed(self):
-        is_ai = self.mode_combo.currentData() == "ai"
-        self.classic_widget.setVisible(not is_ai)
-        self.ai_hint.setVisible(is_ai)
+        mode = self.mode_combo.currentData()
+        self.classic_widget.setVisible(mode == "classic")
+        self.ai_hint.setVisible(mode == "ai")
+        self.bria_hint.setVisible(mode == "bria")
 
     def _run_processing(self):
         if self.original_image is None:
             return
         mode = self.mode_combo.currentData()
+
+        if mode == "bria":
+            api_token = self.api_key_input.text().strip()
+            if not api_token:
+                self.export_status.setText("Cle Replicate manquante dans le panneau droit.")
+                self.export_status.setStyleSheet("color: #e63946; font-size: 11px;")
+                return
+        else:
+            api_token = ""
+
         self.process_btn.setEnabled(False)
-        self.process_btn.setText("Analyse IA..." if mode == "ai" else "Traitement...")
+        if mode == "ai":
+            self.process_btn.setText("Analyse IA locale...")
+        elif mode == "bria":
+            self.process_btn.setText("BRIA en cours...")
+        else:
+            self.process_btn.setText("Traitement...")
 
         self._worker = ProcessingWorker(
             self.original_image.copy(),
@@ -506,6 +558,7 @@ class MainWindow(QMainWindow):
             target_color=self._manual_bg_color,
             exclude_colors=list(self._exclude_colors),
             protect_colors=list(self._protect_colors),
+            api_token=api_token,
         )
         self._worker.done.connect(self._on_processing_done)
         self._worker.error.connect(self._on_processing_error)
@@ -514,7 +567,6 @@ class MainWindow(QMainWindow):
     def _on_processing_done(self, result: Image.Image):
         self.processed_image = result.copy()
         self._refined_image = None
-        # New processing result: reset zoom to fit
         self.preview.set_after(result, keep_zoom=False)
         self.export_btn.setEnabled(True)
         self.process_btn.setEnabled(True)
@@ -535,7 +587,6 @@ class MainWindow(QMainWindow):
             erode=erode,
             feather=feather,
         )
-        # Preserve zoom while refining
         self.preview.set_after(self._refined_image, keep_zoom=True)
         self._refresh_colors(self._refined_image)
 
@@ -547,7 +598,6 @@ class MainWindow(QMainWindow):
         self.threshold_slider.setValue(128)
         self.erode_slider.setValue(0)
         self.feather_slider.setValue(0)
-        # Preserve zoom on reset too
         self.preview.set_after(self.processed_image, keep_zoom=True)
         self._refresh_colors(self.processed_image)
 
